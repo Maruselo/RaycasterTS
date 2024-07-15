@@ -1,0 +1,14 @@
+{
+  "name": "raycasterts",
+  "version": "1.0.0",
+  "description": "Raycasting using TypeScript",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.5.3"
+  }
+}
