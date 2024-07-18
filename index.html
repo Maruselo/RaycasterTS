@@ -9,18 +9,23 @@
     <!-- <link rel="stylesheet" href="./style.css"> -->
     <!-- <link rel="icon" href="./favicon.ico" type="image/x-icon"> -->
     <style>
-        #game {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-        }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      #game {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        translate: -50% -50%;
+        max-width: 95%;
+        max-height: 95%;
+      }
     </style>
     </head>
   <body>
-    <main>
-        <canvas id="game"></canvas>
-    </main>
+    <canvas id="game"></canvas>
 	<script src="index.js"></script>
   </body>
 </html>

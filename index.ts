@@ -9,15 +9,14 @@ const ROT_SPEED = 2;
 const MAP_ROWS = 7;
 const MAP_COLS = 10;
 const SCENE = [
-    [1, 1, 1, 1, 2, 4, 4, 4, 4, 1],
-    [1, 0, 0, 0, 2, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 2, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 4, 4, 4, 4, 4],
+    [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
+    [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
+    [1, 0, 3, 0, 0, 0, 0, 0, 0, 1],
     [1, 0, 3, 3, 3, 0, 0, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 0, 0, 1, 1],
 ];
-type Scene = Array<Array<number>>;
 
 class Vector2 {
     x: number;
@@ -99,32 +98,36 @@ class Vector3 {
 }
 
 class Color {
-    rgb: Vector3
-    a: number
-
-    get r() {
-        return this.rgb.x;
-    }
-    get g() {
-        return this.rgb.y;
-    }
-    get b() {
-        return this.rgb.z;
-    }
-
-    set r(value) {
-        this.rgb.x = value;
-    }
-    set g(value) {
-        this.rgb.y = value;
-    }
-    set b(value) {
-        this.rgb.z = value;
-    }
+    r: number // 0 - 255
+    g: number // 0 - 255
+    b: number // 0 - 255
+    a: number // 0 - 1
 
     constructor(r: number, g: number, b: number, a: number = 1) {
-        this.rgb = new Vector3(r, g, b);
+        this.r = r;
+        this.g = g;
+        this.b = b;
         this.a = a;
+    }
+
+    setBrightness(factor: number): Color {
+        const newColor = new Color(0, 0, 0);
+
+        if (factor > 1) factor = 1;
+        else if (factor < -1) factor = -1;
+
+        if (factor < 0) {
+            factor += 1;
+            newColor.r = this.r * factor;
+            newColor.g = this.g * factor;
+            newColor.b = this.b * factor;
+        } else {
+            newColor.r = (255 - this.r) * factor + this.r;
+            newColor.g = (255 - this.g) * factor + this.g;
+            newColor.b = (255 - this.b) * factor + this.b;
+        }
+
+        return newColor;
     }
 
     toString() : string {
@@ -146,7 +149,20 @@ class Player {
     }
 
     move(value: number) {
-        this.position = this.position.add(this.direction.scale(value));
+        const newMapLoc: Vector2 = new Vector2(
+            Math.trunc(this.position.x + this.direction.x * value),
+            Math.trunc(this.position.y + this.direction.y * value)
+        );
+
+        if (newMapLoc.x < 0 || newMapLoc.x >= MAP_COLS ||
+            newMapLoc.y < 0 || newMapLoc.y >= MAP_ROWS
+        )
+            return;
+
+        if (!SCENE[Math.trunc(this.position.y)][newMapLoc.x]) 
+            this.position.x += this.direction.x * value;
+        if (!SCENE[newMapLoc.y][Math.trunc(this.position.x)]) 
+            this.position.y += this.direction.y * value;
     }
 }
 
@@ -206,7 +222,7 @@ function snapToGrid(ray: Vector2, point: Vector2, origin: Vector2, axis: string)
     }
 }
 
-function rayCast(player: Player, ray: Vector2): [Vector2, number, number] {
+function rayCast(player: Player, ray: Vector2): [boolean, Vector2, number, number] {
     // Which cell of the grid we're in
     const mapLoc = new Vector2(Math.trunc(player.position.x), Math.trunc(player.position.y));
      
@@ -223,7 +239,7 @@ function rayCast(player: Player, ray: Vector2): [Vector2, number, number] {
     // What direction to step in x or y (either +1 or -1)
     const stepDir = Vector2.zero();
 
-    let hit = 0; // was there a wall hit?
+    let hit = false; // was there a wall hit?
     let side = 0; // was a NS or a EW wall hit
 
     // Calculate step and initial side distance
@@ -258,15 +274,21 @@ function rayCast(player: Player, ray: Vector2): [Vector2, number, number] {
             side = 1;
         }
 
+        // Check if ray is out of bounds
+        if (mapLoc.x < 0 || mapLoc.x >= MAP_COLS ||
+            mapLoc.y < 0 || mapLoc.y >= MAP_ROWS
+        )
+            return [hit, mapLoc, 0, side];
+        
         // Check if ray has hit a wall
-        if (SCENE[mapLoc.y][mapLoc.x] > 0) hit = 1;
+        if (SCENE[mapLoc.y][mapLoc.x] > 0) hit = true;
     }
 
     // Calculate distance projected on camera direction (Euclidean distance would give fisheye effect!)
     if(side === 0) perpWallDist = (sideDist.x - deltaDist.x);
     else perpWallDist = (sideDist.y - deltaDist.y);
 
-    return [mapLoc, perpWallDist, side];
+    return [hit, mapLoc, perpWallDist, side];
 }
 
 function renderGridLines(ctx: CanvasRenderingContext2D) {
@@ -348,7 +370,8 @@ function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Came
     for (let x = 0; x < w; x++) {
         camera.x = 2 * (w - x) / w - 1;
         const ray = player.direction.add(camera.plane.scale(camera.x));
-        const [mapLoc, height, side] = rayCast(player, ray);
+        const [hit, mapLoc, height, side] = rayCast(player, ray);
+        if (!hit) continue; // If ray hits nothing, don't draw anything
 
         // Calculate height of line to draw on screen
         const lineHeight = Math.trunc(h / height);
@@ -363,10 +386,10 @@ function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Came
         let color = new Color(...SCENE_COLORS[SCENE[mapLoc.y][mapLoc.x]]);
 
         // Give x and y sides different brightness
-        if (side == 1) {color.rgb = color.rgb.scale(0.5)}
-
+        //if (side == 1) {color.setBrightness(-0.5)}
+        
         // Draw the pixels of the stripe as a vertical line
-        ctx.strokeStyle = color.toString();
+        ctx.strokeStyle = color.setBrightness((drawEnd - drawStart) / h - 1).toString();
         ctx.beginPath();
         ctx.moveTo(x, drawStart);
         ctx.lineTo(x, drawEnd);
@@ -418,8 +441,8 @@ function render(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
     }
 
     // Define canvas size
-    game.width = 640;
-    game.height = 480;
+    game.width = 960;
+    game.height = 720;
 
     // Get canvas context
     const ctx = game.getContext("2d");
@@ -440,26 +463,27 @@ function render(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
         keysPressed[event.code] = true;
     });
     window.addEventListener("keyup", (event) => {
-        keysPressed[event.code] = false;
+        delete keysPressed[event.code];
     });
 
     // Main game loop
     let prevTime = performance.now();
     let accumulatedFrameTime = 0;
 
-    function gameLoop(currentTime: number) {
+    const gameLoop = (currentTime: number) => {
         if (isRunning) requestAnimationFrame(gameLoop);
-        
+
         const elapsedTime = currentTime - prevTime;
         prevTime = currentTime;
         accumulatedFrameTime += elapsedTime;
 
+        // Update in fixed time step
         while (accumulatedFrameTime >= frameDuration) {
             update(frameDuration / 1000, player, camera);
             accumulatedFrameTime -= frameDuration;
         }
 
-        if (ctx !== null) render(ctx, player, camera);
+        render(ctx, player, camera);
     }
 
     requestAnimationFrame(gameLoop);
