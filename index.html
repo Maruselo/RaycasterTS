@@ -14,7 +14,7 @@
         padding: 0;
         box-sizing: border-box;
       }
-      #game {
+      .container {
         position: absolute;
         top: 50%;
         left: 50%;
@@ -25,7 +25,13 @@
     </style>
     </head>
   <body>
-    <canvas id="game"></canvas>
+    <div class="container">
+      <div style="margin-bottom: 8px;">
+        <span>Controls: WASD</span>
+        <span style="float:right">Source Code: <a href="https://github.com/maruselo/RaycasterTS">https://github.com/maruselo/RaycasterTS</a></span>
+      </div>
+      <canvas id="game"></canvas>
+    </div>
 	<script src="index.js"></script>
   </body>
 </html>

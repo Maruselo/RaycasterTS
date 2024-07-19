@@ -6,17 +6,7 @@ let keysPressed: {[key: string] : boolean} = {};
 const MOV_SPEED = 1.2;
 const ROT_SPEED = 2;
 
-const MAP_ROWS = 7;
-const MAP_COLS = 10;
-const SCENE = [
-    [1, 1, 1, 1, 1, 4, 4, 4, 4, 4],
-    [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
-    [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
-    [1, 0, 3, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 3, 3, 3, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 0, 0, 1, 1],
-];
+type Cell = number;
 
 class Vector2 {
     x: number;
@@ -31,12 +21,16 @@ class Vector2 {
         return new Vector2(0, 0);
     }
 
-    static fromAngle(angle: number): Vector2 {
+    static fromAngle(angle: number) : Vector2 {
         return new Vector2(Math.cos(angle), Math.sin(angle));
     }
 
     toArray() : [number, number] {
         return [this.x, this.y];
+    }
+
+    map(f: (n: number) => number) : Vector2 {
+        return new Vector2(f(this.x), f(this.y));
     }
 
     add(vector: Vector2) : Vector2 {
@@ -110,7 +104,7 @@ class Color {
         this.a = a;
     }
 
-    setBrightness(factor: number): Color {
+    setBrightness(factor: number) : Color {
         const newColor = new Color(0, 0, 0);
 
         if (factor > 1) factor = 1;
@@ -135,6 +129,16 @@ class Color {
     }
 }
 
+class Material {
+    color: Color
+    texture: HTMLImageElement
+
+    constructor(color: Color, texture: HTMLImageElement) {
+        this.color = color;
+        this.texture = texture;
+    }
+}
+
 class Player {
     position: Vector2
     direction: Vector2
@@ -148,20 +152,14 @@ class Player {
         this.direction = this.direction.rotate(value);
     }
 
-    move(value: number) {
-        const newMapLoc: Vector2 = new Vector2(
-            Math.trunc(this.position.x + this.direction.x * value),
-            Math.trunc(this.position.y + this.direction.y * value)
-        );
+    move(scene: Scene, value: number) {
+        const newMapLoc = this.position.add(this.direction.scale(value));
 
-        if (newMapLoc.x < 0 || newMapLoc.x >= MAP_COLS ||
-            newMapLoc.y < 0 || newMapLoc.y >= MAP_ROWS
-        )
-            return;
-
-        if (!SCENE[Math.trunc(this.position.y)][newMapLoc.x]) 
+        // Horizontal movement with boundary and wall collision check
+        if (scene.getCellAt(new Vector2(newMapLoc.x, Math.trunc(this.position.y))) === 0)
             this.position.x += this.direction.x * value;
-        if (!SCENE[newMapLoc.y][Math.trunc(this.position.x)]) 
+        // Vertical movement with boundary wall collision check
+        if (scene.getCellAt(new Vector2(Math.trunc(this.position.x), newMapLoc.y)) === 0)
             this.position.y += this.direction.y * value;
     }
 }
@@ -180,11 +178,47 @@ class Camera {
     }
 }
 
-const SCENE_COLORS : {[key: number] : [number, number, number]} = {
-    1: [255, 0, 0],
-    2: [0, 255, 0],
-    3: [0, 0, 255],
-    4: [255, 255, 255],
+class Scene {
+    cells: Array<Cell>
+    width: number
+    height: number
+    
+    constructor(cells: Array<Array<Cell>>) {
+        this.height = cells.length;
+        this.width = cells.reduce((a, b) => Math.max(a, b.length), 0);
+        this.cells = cells.reduce((a, b) => a.concat(b), []);
+    }
+
+    size() : Vector2 {
+        return new Vector2(this.width, this.height);
+    }
+
+    getCellAt(point: Vector2) : Cell | undefined {
+        if (!this._isInside(point)) return undefined;
+
+        const fpoint = point.map(Math.trunc)
+        return this.cells[fpoint.y * this.width + fpoint.x];
+    }
+
+    _isInside(point: Vector2) : boolean {
+        return !(point.x < 0 || point.x >= this.width || point.y < 0 || point.y >= this.height);
+    }
+}
+
+const SCENE_TEXTURES: {[key: number] : string | HTMLImageElement} = {
+    1: "textures/128x128/Brick/Brick_02-128x128.png",
+    2: "textures/128x128/Bricks/Bricks_08-128x128.png",
+    3: "textures/128x128/Metal/Metal_07-128x128.png",
+    4: "textures/128x128/Plaster/Plaster_02-128x128.png",
+};
+
+function loadImage(url: string) : Promise<HTMLImageElement> {
+    const image = new Image();
+    image.src = url;
+    return new Promise((resolve, reject) => {
+        image.onload = () => resolve(image);   
+        image.onerror = reject;
+    });
 }
 
 function fillCircle(ctx: CanvasRenderingContext2D, center: Vector2, radius: number) {
@@ -222,20 +256,16 @@ function snapToGrid(ray: Vector2, point: Vector2, origin: Vector2, axis: string)
     }
 }
 
-function rayCast(player: Player, ray: Vector2): [boolean, Vector2, number, number] {
+function rayCast(scene: Scene, player: Player, ray: Vector2) : [boolean, Vector2, number, number, number] {
     // Which cell of the grid we're in
-    const mapLoc = new Vector2(Math.trunc(player.position.x), Math.trunc(player.position.y));
+    const mapLoc = player.position.map(Math.trunc);
      
     // Length of ray from current position to next x or y-side
     const sideDist = Vector2.zero();
 
     // Length of ray from one x or y-side to the next x or y-side
-    const deltaDist = new Vector2(
-        (ray.x === 0) ? Infinity : Math.abs(1 / ray.x),
-        (ray.y === 0) ? Infinity : Math.abs(1 / ray.y)
-    );
-    let perpWallDist: number;
-
+    const deltaDist = ray.map((n) => n === 0 ? Infinity : Math.abs(1 / n));
+ 
     // What direction to step in x or y (either +1 or -1)
     const stepDir = Vector2.zero();
 
@@ -274,51 +304,61 @@ function rayCast(player: Player, ray: Vector2): [boolean, Vector2, number, numbe
             side = 1;
         }
 
-        // Check if ray is out of bounds
-        if (mapLoc.x < 0 || mapLoc.x >= MAP_COLS ||
-            mapLoc.y < 0 || mapLoc.y >= MAP_ROWS
-        )
-            return [hit, mapLoc, 0, side];
-        
-        // Check if ray has hit a wall
-        if (SCENE[mapLoc.y][mapLoc.x] > 0) hit = true;
+        // Check if ray has hit a wall, exit if it's out of bounds
+        const cell = scene.getCellAt(mapLoc);
+        if (cell === undefined) return [hit, mapLoc, -1, -1, -1];
+        else if (cell > 0) hit = true;
     }
 
     // Calculate distance projected on camera direction (Euclidean distance would give fisheye effect!)
+    let perpWallDist: number;
     if(side === 0) perpWallDist = (sideDist.x - deltaDist.x);
     else perpWallDist = (sideDist.y - deltaDist.y);
 
-    return [hit, mapLoc, perpWallDist, side];
+    // Calculate where exactly the wall was hit
+    let wallX: number;
+    if (side == 0) wallX = player.position.y + perpWallDist * ray.y;
+    else wallX = player.position.x + perpWallDist * ray.x;
+    wallX -= Math.floor(wallX);
+
+    return [hit, mapLoc, perpWallDist, wallX, side];
 }
 
-function renderGridLines(ctx: CanvasRenderingContext2D) {
+function renderGridLines(ctx: CanvasRenderingContext2D, scene: Scene) {
     ctx.lineWidth = 0.1;
     ctx.strokeStyle = "#303030";
 
     // Horizontal lines
-    for (let x = 0; x <= MAP_COLS; x++) {
-        strokeLine(ctx, new Vector2(x, 0), new Vector2(x, MAP_ROWS));
+    for (let x = 0; x <= scene.width; x++) {
+        strokeLine(ctx, new Vector2(x, 0), new Vector2(x, scene.height));
     }
     // Vertical lines
-    for (let y = 0; y <= MAP_ROWS; y++) {
-        strokeLine(ctx, new Vector2(0, y), new Vector2(MAP_COLS, y));
+    for (let y = 0; y <= scene.height; y++) {
+        strokeLine(ctx, new Vector2(0, y), new Vector2(scene.width, y));
     }
 }
 
-function renderGridCells(ctx: CanvasRenderingContext2D) {
-    for (let y = 0; y < MAP_ROWS; y++) {
-        for (let x = 0; x < MAP_COLS; x++) {
-            if (SCENE[y][x] != 0) {
-                const cellColor = new Color(...SCENE_COLORS[SCENE[y][x]]);
-                ctx.fillStyle = cellColor.toString();
-                ctx.fillRect(x, y, 1, 1);
+function renderGridCells(ctx: CanvasRenderingContext2D, scene: Scene) {
+    for (let y = 0; y < scene.height; y++) {
+        for (let x = 0; x < scene.width; x++) {
+            const cell = scene.getCellAt(new Vector2(x, y)) as number;
+            if (cell != 0) {
+                if (cell in SCENE_TEXTURES) {
+                    const cellTex = SCENE_TEXTURES[cell] as HTMLImageElement;
+                    ctx.drawImage(cellTex, x, y, 1, 1);
+                } else {
+                    const cellColor = new Color(128, 128, 128);
+                    ctx.fillStyle = cellColor.toString();
+                    ctx.fillRect(x, y, 1, 1);
+                }
             }
         }
     }
 }
 
 function renderMinimapGrid(
-    ctx: CanvasRenderingContext2D, 
+    ctx: CanvasRenderingContext2D,
+    scene: Scene,
     player: Player, 
     camera: Camera,
     position: Vector2,
@@ -327,17 +367,17 @@ function renderMinimapGrid(
     ctx.save();
     
     ctx.translate(...position.toArray());
-    ctx.scale(size.x / MAP_COLS, size.y / MAP_ROWS);
+    ctx.scale(...size.div(scene.size()).toArray());
 
     // Draw background rect
     ctx.fillStyle = "#181818"
-    ctx.fillRect(0, 0, MAP_COLS, MAP_ROWS);
+    ctx.fillRect(0, 0, scene.width, scene.height);
     
     // Draw grid cells
-    renderGridCells(ctx);
+    renderGridCells(ctx, scene);
 
     // Draw grid lines
-    renderGridLines(ctx);
+    renderGridLines(ctx, scene);
 
     // Draw player
     ctx.fillStyle = "magenta";
@@ -362,7 +402,7 @@ function renderMinimapGrid(
     ctx.restore();
 }
 
-function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
+function renderScene(ctx: CanvasRenderingContext2D, scene: Scene, player: Player, camera: Camera) {
     ctx.save();
     
     const [w, h] = getCanvasSize(ctx).toArray();
@@ -370,7 +410,7 @@ function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Came
     for (let x = 0; x < w; x++) {
         camera.x = 2 * (w - x) / w - 1;
         const ray = player.direction.add(camera.plane.scale(camera.x));
-        const [hit, mapLoc, height, side] = rayCast(player, ray);
+        const [hit, mapLoc, height, wallX, side] = rayCast(scene, player, ray);
         if (!hit) continue; // If ray hits nothing, don't draw anything
 
         // Calculate height of line to draw on screen
@@ -382,14 +422,38 @@ function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Came
         let drawEnd = Math.trunc(lineHeight / 2 + h / 2);
         if(drawEnd >= h) drawEnd = h - 1;
 
-        // Choose wall color
-        let color = new Color(...SCENE_COLORS[SCENE[mapLoc.y][mapLoc.x]]);
+        const cell = scene.getCellAt(mapLoc) as number;
+        let color: Color
+        if (cell in SCENE_TEXTURES) {
+            const texture = SCENE_TEXTURES[cell] as HTMLImageElement;
+            
+            // Calculate texture x-coordinate
+            let u = Math.floor(wallX * texture.width);
+            if (side == 0 && ray.x > 0 || side == 1 && ray.y < 0) u = texture.width - u - 1;
+            
+            // Determine color based on what side was hit
+            color = new Color(0, 0, 0, 0);
+            if (side === 1) color.a += 0.5;
 
-        // Give x and y sides different brightness
-        //if (side == 1) {color.setBrightness(-0.5)}
+            // Draw image slice on the vertical strip
+            ctx.drawImage(
+                texture, 
+                u, 0, 1, texture.height, 
+                x, (h - lineHeight)*0.5, 1, lineHeight
+            );
+        }
+        else {
+            // Choose wall color
+            color = new Color(128, 128, 128);
+
+            // Give x and y sides different brightness
+            if (side === 1) color = color.setBrightness(-0.5)
+            
+            //ctx.strokeStyle = color.setBrightness((drawEnd - drawStart) / h - 1).toString();
+        }
         
         // Draw the pixels of the stripe as a vertical line
-        ctx.strokeStyle = color.setBrightness((drawEnd - drawStart) / h - 1).toString();
+        ctx.strokeStyle = color.toString();
         ctx.beginPath();
         ctx.moveTo(x, drawStart);
         ctx.lineTo(x, drawEnd);
@@ -399,12 +463,14 @@ function renderScene(ctx: CanvasRenderingContext2D, player: Player, camera: Came
     ctx.restore();
 }
 
-function update(dt: number, player: Player, camera: Camera) {
+function update(dt: number, scene: Scene, player: Player, camera: Camera) {
     if (keysPressed['KeyW']) {
-        player.move(MOV_SPEED * dt);
+        if (keysPressed['ShiftLeft']) player.move(scene, 1.5 * MOV_SPEED * dt);
+        else player.move(scene, MOV_SPEED * dt);
     } 
     if (keysPressed['KeyS']) {
-        player.move(-MOV_SPEED * dt);
+        if (keysPressed['ShiftLeft']) player.move(scene, 1.5 * -MOV_SPEED * dt);
+        else player.move(scene, -MOV_SPEED * dt);
     } 
     if (keysPressed['KeyA']) {
         player.rotate(-ROT_SPEED * dt);
@@ -416,24 +482,24 @@ function update(dt: number, player: Player, camera: Camera) {
     } 
 }
 
-function render(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
+function render(ctx: CanvasRenderingContext2D, scene: Scene, player: Player, camera: Camera) {
     const cellSize = ctx.canvas.width * 0.03;
     const minimapPosition = Vector2.zero().add(getCanvasSize(ctx).scale(0.03));
-    const minimapSize = new Vector2(MAP_COLS, MAP_ROWS).scale(cellSize);
+    const minimapSize = scene.size().scale(cellSize);
     
     // Draw background rect
     ctx.fillStyle = "#181818"
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // Draw scene
-    renderScene(ctx, player, camera);
+    renderScene(ctx, scene, player, camera);
 
     // Draw minimap
-    renderMinimapGrid(ctx, player, camera, minimapPosition, minimapSize);
+    renderMinimapGrid(ctx, scene, player, camera, minimapPosition, minimapSize);
 }
 
 // Only execute when everything else is fully loaded
-;(() => {
+;(async () => {
     // Get canvas element
     const game = document.getElementById("game") as (HTMLCanvasElement | null);
     if (game === null) {
@@ -449,14 +515,31 @@ function render(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
     if (ctx === null) {
         throw new Error("2D content is not supported.");
     }
+    ctx.imageSmoothingEnabled = false;
 
+    const scene = new Scene([
+        [1, 1, 1, 1, 1, 4, 4, 4, 4, 4],
+        [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
+        [1, 0, 0, 0, 2, 0, 0, 0, 0, 4],
+        [1, 0, 3, 0, 0, 0, 5, 5, 0, 1],
+        [1, 0, 3, 3, 3, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1, 1, 0, 0, 1, 1],
+    ]);
+ 
     const player = new Player(
-        new Vector2(MAP_COLS, MAP_ROWS).mult(new Vector2(0.85, 0.40)),
+        scene.size().mult(new Vector2(0.85, 0.40)),
         new Vector2(-1, 0)
     )
     const camera = new Camera(
         new Vector2(0, 0.66)
     )
+
+    // Load textures
+    for (let id in SCENE_TEXTURES) {
+        const path = SCENE_TEXTURES[id];
+        SCENE_TEXTURES[id] = await loadImage(path as string);
+    }
 
     // Setup listeners
     window.addEventListener("keydown", (event) => {
@@ -479,11 +562,11 @@ function render(ctx: CanvasRenderingContext2D, player: Player, camera: Camera) {
 
         // Update in fixed time step
         while (accumulatedFrameTime >= frameDuration) {
-            update(frameDuration / 1000, player, camera);
+            update(frameDuration / 1000, scene, player, camera);
             accumulatedFrameTime -= frameDuration;
         }
 
-        render(ctx, player, camera);
+        render(ctx, scene, player, camera);
     }
 
     requestAnimationFrame(gameLoop);
