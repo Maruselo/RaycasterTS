@@ -1,4 +1,4 @@
-const GAME_SCALE = 80;
+const GAME_SCALE = 40;
 const GAME_WIDTH = GAME_SCALE * 4;
 const GAME_HEIGHT = GAME_SCALE * 3;
 
@@ -59,6 +59,14 @@ class Vector2 {
        return Math.sqrt(this.x*this.x + this.y*this.y);
     }
 
+    sqrLength(): number {
+        return this.x*this.x + this.y*this.y;
+    }
+
+    sqrDistanceTo(vector: Vector2): number {
+        return vector.sub(this).sqrLength();
+    }
+
     norm() : Vector2 {
         const l = this.length();
         if(l === 0) return new Vector2(0, 0);
@@ -82,12 +90,12 @@ class Vector2 {
 }
 
 class Color {
-    r: number // 0 - 255
-    g: number // 0 - 255
-    b: number // 0 - 255
+    r: number // 0 - 1
+    g: number // 0 - 1
+    b: number // 0 - 1
     a: number // 0 - 1
 
-    constructor(r: number, g: number, b: number, a: number = 1) {
+    constructor(r: number, g: number, b: number, a: number = 1.0) {
         this.r = r;
         this.g = g;
         this.b = b;
@@ -95,27 +103,11 @@ class Color {
     }
 
     setBrightness(factor: number) : Color {
-        const newColor = new Color(0, 0, 0);
-
-        if (factor > 1) factor = 1;
-        else if (factor < -1) factor = -1;
-
-        if (factor < 0) {
-            factor += 1;
-            newColor.r = this.r * factor;
-            newColor.g = this.g * factor;
-            newColor.b = this.b * factor;
-        } else {
-            newColor.r = (255 - this.r) * factor + this.r;
-            newColor.g = (255 - this.g) * factor + this.g;
-            newColor.b = (255 - this.b) * factor + this.b;
-        }
-
-        return newColor;
+        return new Color(this.r * factor, this.g * factor, this.b * factor);
     }
 
     toString() : string {
-        return `rgba(${this.r}, ${this.g}, ${this.b}, ${this.a})`;
+        return `rgba(${this.r * 255}, ${this.g * 255}, ${this.b * 255}, ${this.a})`;
     }
 }
 
@@ -347,8 +339,8 @@ function renderGridCells(ctx: CanvasRenderingContext2D, scene: Scene) {
             const cell = scene.getCellAt(new Vector2(x, y)) as number;
             if (cell != 0) {
                 if (cell in SCENE_TEXTURES) {
-                    const cellTex = SCENE_TEXTURES[cell] as HTMLImageElement;
-                    ctx.drawImage(cellTex, x, y, 1, 1);
+                    const cellTex = SCENE_TEXTURES[cell] as ImageData;
+                    //ctx.drawImage(cellTex, x, y, 1, 1);
                 } else {
                     const cellColor = new Color(128, 128, 128);
                     ctx.fillStyle = cellColor.toString();
@@ -423,8 +415,8 @@ function renderWalls(buffer: ImageData, scene: Scene, player: Player, camera: Ca
         let drawStart = Math.trunc(-lineHeight / 2 + h / 2);
         if(drawStart < 0) drawStart = 0;
         let drawEnd = Math.trunc(lineHeight / 2 + h / 2);
-        if(drawEnd >= h) drawEnd = h - 1;
-
+        if(drawEnd >= h - 1) drawEnd = h - 1;
+    
         const cell = scene.getCellAt(mapLoc) as number;
         if (cell in SCENE_TEXTURES) {
             const texture = SCENE_TEXTURES[cell] as ImageData;
@@ -434,19 +426,22 @@ function renderWalls(buffer: ImageData, scene: Scene, player: Player, camera: Ca
             if ((side == 0 && ray.x > 0) || (side == 1 && ray.y < 0)) u = texture.width - u - 1;
     
             // How much to increase the texture coordinate per screen pixel
-            const step = texture.height / lineHeight;
+            const step = texture.height / (lineHeight + 2);
 
             // Starting texture coordinate
-            let texPos = ((drawStart - 2) - h / 2 + lineHeight / 2) * step;
-            
+            let texPos = (drawStart - h / 2 + lineHeight / 2) * step;
+
             for (let y = drawStart - 1; y <= drawEnd; y++) {
                 const v = Math.trunc(texPos) & (texture.height - 1);
                 texPos += step;
 
-                buffer.data[(y * w + x) * 4 + 0] = texture.data[(v * texture.width + u) * 4 + 0];
-                buffer.data[(y * w + x) * 4 + 1] = texture.data[(v * texture.width + u) * 4 + 1];
-                buffer.data[(y * w + x) * 4 + 2] = texture.data[(v * texture.width + u) * 4 + 2];
-                buffer.data[(y * w + x) * 4 + 3] = texture.data[(v * texture.width + u) * 4 + 3];
+                const srcP = (v * texture.width + u) * 4;
+                const dstP = (y * w + x) * 4;
+
+                buffer.data[dstP + 0] = texture.data[srcP + 0] / Math.max(height, 0.8);
+                buffer.data[dstP + 1] = texture.data[srcP + 1] / Math.max(height, 0.8);
+                buffer.data[dstP + 2] = texture.data[srcP + 2] / Math.max(height, 0.8);
+                buffer.data[dstP + 3] = texture.data[srcP + 3];
             }
         }
         else {
@@ -468,58 +463,100 @@ function renderWalls(buffer: ImageData, scene: Scene, player: Player, camera: Ca
 
 function renderFloor(buffer: ImageData, player: Player, camera: Camera) {
     const [w, h] = [GAME_WIDTH, GAME_HEIGHT];
-    const texture = SCENE_TEXTURES[5] as ImageData;
+    //const texture = SCENE_TEXTURES[5] as ImageData;
+    let floorColor: Color;
+    let floorColor1 = new Color(0.094, 0.094 + 0.05, 0.094 + 0.05);
+    let floorColor2 = new Color(0.188, 0.188 + 0.05, 0.188 + 0.05);
 
-    for (let y = 0; y < h; y++) {
-        // Leftmost ray (x = 0) and rightmost ray (x = w)
-        const rayLeft = player.direction.sub(camera.plane);
-        const rayRight = player.direction.add(camera.plane);
+    // Leftmost ray (x = 0) and rightmost ray (x = w)
+    const rayLeft = player.direction.sub(camera.plane);
+    const rayRight = player.direction.add(camera.plane);
 
+    for (let y = h / 2 + 1; y < h; y++) {
         let [floor, step] = floorRayCast(player, y, rayLeft, rayRight);
         
         for(let x = 0; x < w; x++) {
             const cell = floor.map(Math.trunc);
             
-            const u = Math.trunc(texture.width * (floor.x - cell.x)) & (texture.width - 1);
-            const v = Math.trunc(texture.height * (floor.y - cell.y)) & (texture.height - 1);
+            // const u = Math.trunc(texture.width * (floor.x - cell.x)) & (texture.width - 1);
+            // const v = Math.trunc(texture.height * (floor.y - cell.y)) & (texture.height - 1);
             
             floor = floor.add(step);
 
+            // // Floor
+            // buffer.data[(y * w + x) * 4 + 0] = texture.data[(v * texture.width + u) * 4 + 0];
+            // buffer.data[(y * w + x) * 4 + 1] = texture.data[(v * texture.width + u) * 4 + 1];
+            // buffer.data[(y * w + x) * 4 + 2] = texture.data[(v * texture.width + u) * 4 + 2];
+            // buffer.data[(y * w + x) * 4 + 3] = texture.data[(v * texture.width + u) * 4 + 3];
+
+            if ((cell.x + cell.y) % 2) {
+                floorColor = floorColor1;
+            } else {
+                floorColor = floorColor2;
+            }
+
+            const fogFactor = Math.sqrt(player.position.sqrDistanceTo(floor));
+            floorColor = floorColor.setBrightness(fogFactor);
+
             // Floor
-            buffer.data[(y * w + x) * 4 + 0] = texture.data[(v * texture.width + u) * 4 + 0];
-            buffer.data[(y * w + x) * 4 + 1] = texture.data[(v * texture.width + u) * 4 + 1];
-            buffer.data[(y * w + x) * 4 + 2] = texture.data[(v * texture.width + u) * 4 + 2];
-            buffer.data[(y * w + x) * 4 + 3] = texture.data[(v * texture.width + u) * 4 + 3];
+            const floorDest = (y * w + x) * 4;
+            buffer.data[floorDest + 0] = floorColor.r * 255;
+            buffer.data[floorDest + 1] = floorColor.g * 255;
+            buffer.data[floorDest + 2] = floorColor.b * 255;
+            buffer.data[floorDest + 3] = floorColor.a * 255;
+        }
+    }
+}
+
+function renderCeiling(buffer: ImageData, player: Player, camera: Camera) {
+    const [w, h] = [GAME_WIDTH, GAME_HEIGHT];
+
+    let ceilingColor: Color;
+    let ceilingColor1 = new Color(0.094 + 0.05, 0.094, 0.094);
+    let ceilingColor2 = new Color(0.188 + 0.05, 0.188, 0.188);
+
+    // Leftmost ray (x = 0) and rightmost ray (x = w)
+    const rayLeft = player.direction.sub(camera.plane);
+    const rayRight = player.direction.add(camera.plane);
+
+    for (let y = h / 2 + 1; y < h; y++) {
+        let [floor, step] = floorRayCast(player, y, rayLeft, rayRight);
+        
+        for(let x = 0; x < w; x++) {
+            const cell = floor.map(Math.trunc);
+            
+            // const u = Math.trunc(texture.width * (floor.x - cell.x)) & (texture.width - 1);
+            // const v = Math.trunc(texture.height * (floor.y - cell.y)) & (texture.height - 1);
+            
+            floor = floor.add(step);
+
+            // // Ceiling
+            // buffer.data[((h - y - 1) * w + x) * 4 + 0] = texture.data[(v * texture.width + u) * 4 + 0];
+            // buffer.data[((h - y - 1) * w + x) * 4 + 1] = texture.data[(v * texture.width + u) * 4 + 1];
+            // buffer.data[((h - y - 1) * w + x) * 4 + 2] = texture.data[(v * texture.width + u) * 4 + 2];
+            // buffer.data[((h - y - 1) * w + x) * 4 + 3] = texture.data[(v * texture.width + u) * 4 + 3];
+
+            if ((cell.x + cell.y) % 2) {
+                ceilingColor = ceilingColor1;
+            } else {
+                ceilingColor = ceilingColor2;
+            }
+
+            const fogFactor = Math.sqrt(player.position.sqrDistanceTo(floor));
+            ceilingColor = ceilingColor.setBrightness(fogFactor);
 
             // Ceiling
-            buffer.data[((h - y - 1) * w + x) * 4 + 0] = texture.data[(v * texture.width + u) * 4 + 0];
-            buffer.data[((h - y - 1) * w + x) * 4 + 1] = texture.data[(v * texture.width + u) * 4 + 1];
-            buffer.data[((h - y - 1) * w + x) * 4 + 2] = texture.data[(v * texture.width + u) * 4 + 2];
-            buffer.data[((h - y - 1) * w + x) * 4 + 3] = texture.data[(v * texture.width + u) * 4 + 3];
-
-            // let color: Color
-            // if ((cell.x + cell.y) % 2) {
-            //     color = new Color(24, 24, 24);
-            // } else {
-            //     color = new Color(48, 48, 48);
-            // }
-
-            // // Floor
-            // buffer.data[(y * w + x) * 4 + 0] = color.r;
-            // buffer.data[(y * w + x) * 4 + 1] = color.g;
-            // buffer.data[(y * w + x) * 4 + 2] = color.b;
-            // buffer.data[(y * w + x) * 4 + 3] = color.a * 255;
-            
-            // // Ceiling
-            // buffer.data[((h - y - 1) * w + x) * 4 + 0] = color.r;
-            // buffer.data[((h - y - 1) * w + x) * 4 + 1] = color.g;
-            // buffer.data[((h - y - 1) * w + x) * 4 + 2] = color.b;
-            // buffer.data[((h - y - 1) * w + x) * 4 + 3] = color.a * 255;
+            const ceilingDest = ((h - y - 1) * w + x) * 4;
+            buffer.data[ceilingDest + 0] = ceilingColor.r * 255;
+            buffer.data[ceilingDest + 1] = ceilingColor.g * 255;
+            buffer.data[ceilingDest + 2] = ceilingColor.b * 255;
+            buffer.data[ceilingDest + 3] = ceilingColor.a * 255;
         }
     }
 }
 
 function renderScene(buffer: ImageData, scene: Scene, player: Player, camera: Camera) {
+    renderCeiling(buffer, player, camera);
     renderFloor(buffer, player, camera);
     renderWalls(buffer, scene, player, camera);
 }
@@ -642,3 +679,14 @@ function update(dt: number, scene: Scene, player: Player, camera: Camera) {
 
     requestAnimationFrame(gameLoop);
 })()
+
+const isDev = window.location.hostname === "localhost";
+if (isDev) {
+    const ws = new WebSocket("ws://localhost:6970");
+
+    ws.addEventListener("message", (event) => {
+      if (event.data === "reload") {
+        window.location.reload();
+      }
+    });
+}
